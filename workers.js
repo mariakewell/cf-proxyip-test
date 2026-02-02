@@ -1,15 +1,21 @@
 export default {
   async fetch(request, env) {
-    // 获取名为 'backend' 的环境变量，如果没有设置，则回退到默认地址
-    const backendUrl = env.backend || "";
-
-    // 将 HTML 字符串中的占位符替换为实际的环境变量值
-    const finalHTML = HTML.replace('__BACKEND_ENV_PLACEHOLDER__', backendUrl);
-
+    // 1. 获取环境变量，如果没有设置，回退到原来的默认地址
+    let backendUrl = env.backend || "";
+    
+    backendUrl = backendUrl.trim();
+    if (!backendUrl.startsWith("http")) {
+      backendUrl = "https://" + backendUrl;
+    }
+    if (backendUrl.endsWith("/")) {
+      backendUrl = backendUrl.slice(0, -1);
+    }
+    const configScript = `<script>window.ENV_BACKEND = "${backendUrl}";</script>`;
+    const finalHTML = HTML.replace('<head>', '<head>' + configScript);
     return new Response(finalHTML, {
       headers: {
         "content-type": "text/html; charset=UTF-8",
-        "cache-control": "no-store"
+        "cache-control": "no-store" // 防止浏览器缓存旧的配置
       }
     });
   }
@@ -216,16 +222,16 @@ td.ip-cell{
   right:20px;
   bottom:20px;
   width:min(480px,96vw);
-  height:85vh; /* 使用 height 替代 max-height */
+  height:85vh;
   background:var(--glass);
   backdrop-filter:blur(22px);
   border:1px solid var(--glass-border);
   border-radius:26px;
   box-shadow:0 30px 70px rgba(0,0,0,.28);
   z-index:9999;
-  display:none; /* JS控制显示 */
-  flex-direction: column; /* 启用flex布局以控制滚动 */
-  overflow: hidden; /* 防止子元素溢出圆角 */
+  display:none;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 @media(max-width:768px){
@@ -245,7 +251,7 @@ td.ip-cell{
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0; /* 防止头部被压缩 */
+  flex-shrink: 0;
 }
 
 .ip-detail-header .title {
@@ -256,18 +262,15 @@ td.ip-cell{
 
 .ip-detail-body{
   padding: 8px 24px 24px;
-  overflow-y: auto; /* 核心：激活滚动条 */
-  flex-grow: 1; /* 核心：让body填满剩余空间 */
+  overflow-y: auto;
+  flex-grow: 1;
 }
 
-/* 美化滚动条 (可选) */
 .ip-detail-body::-webkit-scrollbar { width: 5px; }
 .ip-detail-body::-webkit-scrollbar-track { background: transparent; }
 .ip-detail-body::-webkit-scrollbar-thumb { background: rgba(120, 120, 120, .4); border-radius: 3px; }
 
-.section { 
-  margin-top: 20px; 
-}
+.section { margin-top: 20px; }
 .section-title {
   font-weight: 600;
   margin-bottom: 10px;
@@ -308,9 +311,7 @@ td.ip-cell{
   color: var(--text-secondary);
   transition: color .2s;
 }
-.close:hover {
-  color: var(--text);
-}
+.close:hover { color: var(--text); }
 </style>
 </head>
 
@@ -320,7 +321,7 @@ td.ip-cell{
   <div class="glass">
     <h1>CF IP 远程检测</h1>
     <label>后端 API</label>
-    <input id="backend" placeholder="默认为后台配置的环境变量">
+    <input id="backend" placeholder="默认使用环境变量配置的地址">
     <label style="margin-top:12px">IP / 域名（支持多行）</label>
     <textarea id="inputs"></textarea>
     <label style="margin-top:12px">Host (SNI，可选)</label>
@@ -356,7 +357,7 @@ td.ip-cell{
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-/* ================= 原 iptest.js JS（逻辑保留） ================= */
+/* ================= 原 iptest.js JS ================= */
 const backendEl = document.getElementById("backend");
 const inputsEl  = document.getElementById("inputs");
 const hostEl    = document.getElementById("host");
@@ -366,11 +367,7 @@ const statusEl  = document.getElementById("status");
 const startBtn  = document.getElementById("startBtn");
 const clearBtn  = document.getElementById("clearBtn");
 
-// 修改点 2: 将这里原本的 URL 改为特殊的占位符
-// Worker 在返回 HTML 之前会把这个占位符替换成 env.backend 的值
-const DEFAULT_BACKEND = "__BACKEND_ENV_PLACEHOLDER__";
-
-// 页面加载时默认置空，除非 localStorage 有值
+// 页面加载时：如果本地存储有值则显示，否则留空（使用注入的 ENV_BACKEND）
 backendEl.value = localStorage.backend || "";
 
 let map = L.map("map").setView([20,0],2);
@@ -427,6 +424,12 @@ function renderAll(){
 
 function startDetect(){
   if(isDetecting) return;
+  
+  // 保存用户输入的后端地址（如果有的话）到 localStorage
+  if(backendEl.value.trim()){
+    localStorage.backend = backendEl.value.trim();
+  }
+
   const targets=parseInputs();
   if(!targets.length) return;
 
@@ -469,16 +472,29 @@ function startDetect(){
 }
 
 async function detectOne(target){
-  // 获取 API 时，如果输入框为空，则使用默认常量 (这个常量现在已经被替换成了环境变量的值)
-  const endpoint = backendEl.value.trim() || DEFAULT_BACKEND;
+  // 核心逻辑修改：
+  // 优先使用输入框的值，如果为空，则使用 Worker 注入的 window.ENV_BACKEND
+  let endpoint = backendEl.value.trim();
+  if(!endpoint) {
+    // 确保 window.ENV_BACKEND 存在，否则给一个硬编码兜底，防止 crash
+    endpoint = (window.ENV_BACKEND && window.ENV_BACKEND !== "undefined") 
+      ? window.ENV_BACKEND 
+      : "https://ip.guv.de5.net";
+  }
+
+  // 移除可能存在的末尾斜杠，防止拼接出错
+  if(endpoint.endsWith("/")) endpoint = endpoint.slice(0, -1);
 
   const key=\`\${endpoint}|\${target}|\${hostEl.value}\`;
   if(cache.has(key)) return cache.get(key);
+  
   const params=new URLSearchParams({ip:target});
   if(hostEl.value.trim()) params.append("host",hostEl.value.trim());
   
-  // 使用计算出的 endpoint
+  // 这里的 fetch 可能会因为 CORS 或者 Mixed Content 失败，所以加 try catch 在上层处理
   const res=await fetch(endpoint+"/api?"+params);
+  if(!res.ok) throw new Error(\`HTTP \${res.status}\`);
+  
   const data=await res.json();
   const list=data.results||[data];
   cache.set(key,list);
@@ -515,7 +531,7 @@ function renderOne(r){
   mobileList.appendChild(div);
 }
 
-/* ================= 优化后的 IP 详细信息展示逻辑 ================= */
+/* ================= IP 详细信息展示逻辑 ================= */
 
 function parseAbuseScore(v){
   if(!v) return 0;
@@ -525,15 +541,15 @@ function parseAbuseScore(v){
 }
 
 function riskColor(score){
-  if(score<0.5) return "#146c43"; // 极度纯净 (深绿)
-  if(score<1)   return "#1f9d55"; // 纯净 (标准绿)
-  if(score<3)   return "#84cc16"; //可信 (亮绿)
-  if(score<8)   return "#adbe13"; // 轻微风险 (青黄)
-  if(score<15)  return "#facc15"; // 风险 (黄)
-  if(score<25)  return "#f97316"; // 中度风险 (橙)
-  if(score<40)  return "#e45a25"; // 高风险 (橙红)
-  if(score<60)  return "#dc3545"; // 严重风险 (标准红)
-  return "#c81e1e";             // 极度风险 (深红)
+  if(score<0.5) return "#146c43";
+  if(score<1)   return "#1f9d55";
+  if(score<3)   return "#84cc16";
+  if(score<8)   return "#adbe13";
+  if(score<15)  return "#facc15";
+  if(score<25)  return "#f97316";
+  if(score<40)  return "#e45a25";
+  if(score<60)  return "#dc3545";
+  return "#c81e1e";
 }
 
 function getRiskLevel(score){
@@ -551,7 +567,7 @@ function getRiskLevel(score){
 async function showIPDetail(ip){
   const card=document.getElementById("ipDetailCard");
   const body=document.getElementById("ipDetailBody");
-  card.style.display="flex"; // 改为 flex
+  card.style.display="flex";
   body.innerHTML="加载中…";
 
   let d;
@@ -559,7 +575,14 @@ async function showIPDetail(ip){
     if(ipapiCache.has(ip)){
       d=ipapiCache.get(ip);
     }else{
-      d=await fetch("https://api.ipapi.is/?q="+ip).then(r=>r.json());
+      // 修复点：添加 referrerPolicy: 'no-referrer' 
+      // 防止因为来源是 Worker 代理域名而被 API 拒绝
+      const response = await fetch("https://api.ipapi.is/?q="+ip, {
+        referrerPolicy: "no-referrer"
+      });
+      
+      if (!response.ok) throw new Error(\`API Error \${response.status}\`);
+      d = await response.json();
       ipapiCache.set(ip,d);
     }
 
@@ -572,7 +595,6 @@ async function showIPDetail(ip){
 
     const crawlerVal=d.is_crawler===false?"否":(typeof d.is_crawler==="string"?d.is_crawler:"是");
 
-    // 类型中文映射及高亮处理
     const typeMap = {
         hosting: '机房', education: '教育', government: '政府',
         banking: '金融', business: '商用', isp: '住宅'
