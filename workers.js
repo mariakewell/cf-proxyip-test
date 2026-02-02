@@ -1,6 +1,12 @@
 export default {
-  async fetch() {
-    return new Response(HTML, {
+  async fetch(request, env) {
+    // 获取名为 'backend' 的环境变量，如果没有设置，则回退到默认地址
+    const backendUrl = env.backend || "";
+
+    // 将 HTML 字符串中的占位符替换为实际的环境变量值
+    const finalHTML = HTML.replace('__BACKEND_ENV_PLACEHOLDER__', backendUrl);
+
+    return new Response(finalHTML, {
       headers: {
         "content-type": "text/html; charset=UTF-8",
         "cache-control": "no-store"
@@ -20,7 +26,7 @@ const HTML = `<!DOCTYPE html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 
 <style>
-
+/* ================= 原 iptest.js 样式（完整保留） ================= */
 :root {
   --bg-base: #fbfbfd;
   --bg-gradient: radial-gradient(at 0% 0%, hsla(225,39%,92%,1) 0, transparent 50%),
@@ -314,7 +320,7 @@ td.ip-cell{
   <div class="glass">
     <h1>CF IP 远程检测</h1>
     <label>后端 API</label>
-    <input id="backend">
+    <input id="backend" placeholder="默认为后台配置的环境变量">
     <label style="margin-top:12px">IP / 域名（支持多行）</label>
     <textarea id="inputs"></textarea>
     <label style="margin-top:12px">Host (SNI，可选)</label>
@@ -340,7 +346,6 @@ td.ip-cell{
   </div>
 </div>
 
-<!-- IP 详细信息卡片 DOM -->
 <div id="ipDetailCard" class="ip-detail-card">
   <div class="ip-detail-header">
     <span class="title">🔍 IP 详细信息</span>
@@ -351,7 +356,7 @@ td.ip-cell{
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-
+/* ================= 原 iptest.js JS（逻辑保留） ================= */
 const backendEl = document.getElementById("backend");
 const inputsEl  = document.getElementById("inputs");
 const hostEl    = document.getElementById("host");
@@ -361,7 +366,12 @@ const statusEl  = document.getElementById("status");
 const startBtn  = document.getElementById("startBtn");
 const clearBtn  = document.getElementById("clearBtn");
 
-backendEl.value = localStorage.backend || "https://example.com"; //默认后端地址
+// 修改点 2: 将这里原本的 URL 改为特殊的占位符
+// Worker 在返回 HTML 之前会把这个占位符替换成 env.backend 的值
+const DEFAULT_BACKEND = "__BACKEND_ENV_PLACEHOLDER__";
+
+// 页面加载时默认置空，除非 localStorage 有值
+backendEl.value = localStorage.backend || "";
 
 let map = L.map("map").setView([20,0],2);
 L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}").addTo(map);
@@ -459,11 +469,16 @@ function startDetect(){
 }
 
 async function detectOne(target){
-  const key=\`\${backendEl.value}|\${target}|\${hostEl.value}\`;
+  // 获取 API 时，如果输入框为空，则使用默认常量 (这个常量现在已经被替换成了环境变量的值)
+  const endpoint = backendEl.value.trim() || DEFAULT_BACKEND;
+
+  const key=\`\${endpoint}|\${target}|\${hostEl.value}\`;
   if(cache.has(key)) return cache.get(key);
   const params=new URLSearchParams({ip:target});
   if(hostEl.value.trim()) params.append("host",hostEl.value.trim());
-  const res=await fetch(backendEl.value+"/api?"+params);
+  
+  // 使用计算出的 endpoint
+  const res=await fetch(endpoint+"/api?"+params);
   const data=await res.json();
   const list=data.results||[data];
   cache.set(key,list);
@@ -512,7 +527,7 @@ function parseAbuseScore(v){
 function riskColor(score){
   if(score<0.5) return "#146c43"; // 极度纯净 (深绿)
   if(score<1)   return "#1f9d55"; // 纯净 (标准绿)
-  if(score<3)   return "#84cc16"; // 可信 (亮绿)
+  if(score<3)   return "#84cc16"; //可信 (亮绿)
   if(score<8)   return "#adbe13"; // 轻微风险 (青黄)
   if(score<15)  return "#facc15"; // 风险 (黄)
   if(score<25)  return "#f97316"; // 中度风险 (橙)
