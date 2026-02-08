@@ -479,7 +479,7 @@ async function detectOne(target){
     // 确保 window.ENV_BACKEND 存在，否则给一个硬编码兜底，防止 crash
     endpoint = (window.ENV_BACKEND && window.ENV_BACKEND !== "undefined") 
       ? window.ENV_BACKEND 
-      : "https://ip.guv.de5.net";
+      : "https://example.com";
   }
 
   // 移除可能存在的末尾斜杠，防止拼接出错
