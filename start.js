@@ -895,10 +895,34 @@ function renderOne(r){
 /* ================= IP 详细信息展示逻辑 ================= */
 
 function parseAbuseScore(v){
-  if(!v) return 0;
-  if(typeof v==="number") return v;
-  const m=String(v).match(/[\d.]+/);
-  return m?parseFloat(m[0]):0;
+  if(v===null || v===undefined || v==='') return null;
+  if(typeof v==="number") return Number.isFinite(v)?v:null;
+
+  const normalized=String(v).trim().replace(',', '.');
+  const m=normalized.match(/\d+(?:\.\d+)?/);
+  if(!m) return null;
+
+  const parsed=parseFloat(m[0]);
+  return Number.isFinite(parsed)?parsed:null;
+}
+
+function normalizeAbuseScore(score){
+  if(score===null || score===undefined) return null;
+  if(score<0) return 0;
+
+  // ipapi 常见为 0~1；若返回 0~100，则统一转换到 0~1
+  return score>1 ? Math.min(1, score/100) : score;
+}
+
+function parseBooleanFlag(value){
+  if(typeof value==='boolean') return value;
+  if(typeof value==='number') return value!==0;
+  if(typeof value==='string'){
+    const normalized=value.trim().toLowerCase();
+    if(['true','1','yes','y','是'].includes(normalized)) return true;
+    if(['false','0','no','n','否','unknown','null','undefined',''].includes(normalized)) return false;
+  }
+  return Boolean(value);
 }
 
 function riskColor(score){
@@ -947,14 +971,18 @@ async function showIPDetail(ip){
       ipapiCache.set(ip,d);
     }
 
-    const companyScore=parseAbuseScore(d.company?.abuser_score);
-    const asnScore=parseAbuseScore(d.asn?.abuser_score);
-    const base=((companyScore+asnScore)/2)*5;
+    const companyScore=normalizeAbuseScore(parseAbuseScore(d.company?.abuser_score));
+    const asnScore=normalizeAbuseScore(parseAbuseScore(d.asn?.abuser_score));
+    const scoreSources=[companyScore,asnScore].filter(v=>typeof v==='number');
+    const avgAbuseScore=scoreSources.length
+      ? scoreSources.reduce((sum,val)=>sum+val,0)/scoreSources.length
+      : 0;
+    const base=avgAbuseScore*5;
     const flags=["is_crawler","is_proxy","is_vpn","is_tor","is_abuser","is_bogon"];
-    const riskCount=flags.filter(f=>!!d[f]).length;
+    const riskCount=flags.filter(f=>parseBooleanFlag(d[f])).length;
     const score=Math.min(100,base*(1+riskCount*0.15)*100);
 
-    const crawlerVal=d.is_crawler===false?"否":(typeof d.is_crawler==="string"?d.is_crawler:"是");
+    const crawlerVal=parseBooleanFlag(d.is_crawler)?"是":"否";
 
     const typeMap = {
         hosting: '机房', education: '教育', government: '政府',
@@ -991,15 +1019,15 @@ async function showIPDetail(ip){
 <div class="section">
   <div class="section-title">安全检测</div>
   <div class="kv">
-    <div class="k">移动网络</div><div class="v">\${d.is_mobile?"是":"否"}</div>
-    <div class="k">数据中心</div><div class="v">\${d.is_datacenter?"是":"否"}</div>
-    <div class="k">卫星网络</div><div class="v">\${d.is_satellite?"是":"否"}</div>
+    <div class="k">移动网络</div><div class="v">\${parseBooleanFlag(d.is_mobile)?"是":"否"}</div>
+    <div class="k">数据中心</div><div class="v">\${parseBooleanFlag(d.is_datacenter)?"是":"否"}</div>
+    <div class="k">卫星网络</div><div class="v">\${parseBooleanFlag(d.is_satellite)?"是":"否"}</div>
     <div class="k">爬虫</div><div class="v">\${crawlerVal}</div>
-    <div class="k">代理服务器</div><div class="v">\${d.is_proxy?"是":"否"}</div>
-    <div class="k">VPN</div><div class="v">\${d.is_vpn?"是":"否"}</div>
-    <div class="k">Tor 网络</div><div class="v">\${d.is_tor?"是":"否"}</div>
-    <div class="k">滥用 IP</div><div class="v">\${d.is_abuser?"是":"否"}</div>
-    <div class="k">虚假 IP</div><div class="v">\${d.is_bogon?"是":"否"}</div>
+    <div class="k">代理服务器</div><div class="v">\${parseBooleanFlag(d.is_proxy)?"是":"否"}</div>
+    <div class="k">VPN</div><div class="v">\${parseBooleanFlag(d.is_vpn)?"是":"否"}</div>
+    <div class="k">Tor 网络</div><div class="v">\${parseBooleanFlag(d.is_tor)?"是":"否"}</div>
+    <div class="k">滥用 IP</div><div class="v">\${parseBooleanFlag(d.is_abuser)?"是":"否"}</div>
+    <div class="k">虚假 IP</div><div class="v">\${parseBooleanFlag(d.is_bogon)?"是":"否"}</div>
   </div>
 </div>
 
@@ -1013,7 +1041,7 @@ async function showIPDetail(ip){
     <div class="k">坐标</div><div class="v">\${d.location?.latitude ? \`\${d.location.latitude}, \${d.location.longitude}\` : 'N/A'}</div>
     <div class="k">时区</div><div class="v">\${d.location?.timezone || 'N/A'}</div>
     <div class="k">当地时间</div><div class="v">\${d.location?.local_time || 'N/A'}</div>
-    <div class="k">欧盟成员</div><div class="v">\${d.location?.is_eu_member?"是":"否"}</div>
+    <div class="k">欧盟成员</div><div class="v">\${parseBooleanFlag(d.location?.is_eu_member)?"是":"否"}</div>
   </div>
 </div>
 
