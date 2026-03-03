@@ -897,7 +897,7 @@ function renderOne(r){
 function parseAbuseScore(v){
   if(!v) return 0;
   if(typeof v==="number") return v;
-  const m=String(v).match(/[\d.]+/);
+  const m=String(v).match(/[\\d.]+/);
   return m?parseFloat(m[0]):0;
 }
 
@@ -925,6 +925,15 @@ function getRiskLevel(score){
   return "极度风险";
 }
 
+function calculateComprehensiveRiskScore(d){
+  const companyScore=parseAbuseScore(d.company?.abuser_score);
+  const asnScore=parseAbuseScore(d.asn?.abuser_score);
+  const base=((companyScore+asnScore)/2)*5;
+  const flags=["is_crawler","is_proxy","is_vpn","is_tor","is_abuser","is_bogon"];
+  const riskCount=flags.filter(f=>!!d[f]).length;
+  return Math.min(100,base*(1+riskCount*0.15)*100);
+}
+
 async function showIPDetail(ip){
   const card=document.getElementById("ipDetailCard");
   const body=document.getElementById("ipDetailBody");
@@ -947,12 +956,7 @@ async function showIPDetail(ip){
       ipapiCache.set(ip,d);
     }
 
-    const companyScore=parseAbuseScore(d.company?.abuser_score);
-    const asnScore=parseAbuseScore(d.asn?.abuser_score);
-    const base=((companyScore+asnScore)/2)*5;
-    const flags=["is_crawler","is_proxy","is_vpn","is_tor","is_abuser","is_bogon"];
-    const riskCount=flags.filter(f=>!!d[f]).length;
-    const score=Math.min(100,base*(1+riskCount*0.15)*100);
+    const score=calculateComprehensiveRiskScore(d);
 
     const crawlerVal=d.is_crawler===false?"否":(typeof d.is_crawler==="string"?d.is_crawler:"是");
 
