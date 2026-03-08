@@ -68,6 +68,7 @@ const DNS_MAX_RECURSION_DEPTH = 10; // CNAME 递归解析最大深度
 const DEFAULT_PORT = 443; // 默认端口
 const DEFAULT_HOST = "clpan.pages.dev"; // 默认 Host (SNI)
 const DEFAULT_WS_PATH = "/"; // 默认 WebSocket 路径
+const CDN_TRACE_HOST = "dash.cloudflare.com"; // CDN Trace 固定检测域名
 
 // 内存管理配置
 const MEMORY_CHECK_INTERVAL = 300000; // 内存检查间隔（毫秒）- 5分钟
@@ -699,7 +700,7 @@ td.ip-cell{
         <tr>
           <th>来源</th><th>IP</th><th>位置</th><th>ASN</th>
           <th>TLS</th><th>WS</th><th>CDN</th>
-          <th>TLS ms</th><th>WS ms</th><th>Warp</th>
+          <th>TLS ms</th><th>WS ms</th><th>Warp</th><th>出口</th>
         </tr>
       </thead>
       <tbody id="tableBody"></tbody>
@@ -875,7 +876,8 @@ function renderOne(r){
     <td><span class="badge \${r.checks.cdn_trace?'ok':'fail'}">\${r.checks.cdn_trace?'✓':'✕'}</span></td>
     <td>\${r.latency?.tls_handshake_ms||'-'}</td>
     <td>\${r.latency?.ws_connect_ms||'-'}</td>
-    <td>\${r.cdn?.warp||'off'}</td>\`;
+    <td>\${r.cdn?.warp||'off'}</td>
+    <td>\${r.cdn?.egress||'未知'}</td>\`;
   tr.querySelector(".ip-cell").onclick=()=>focusIP(r);
   tableBody.appendChild(tr);
 
@@ -886,6 +888,7 @@ function renderOne(r){
   div.innerHTML=\`
     <strong>\${r.ip}</strong><br>
     <small>来源：\${r._source}</small><br>
+    <small>WARP：\${r.cdn?.warp||'off'} · 出口：\${r.cdn?.egress||'未知'}</small><br>
     <span class="badge \${r.checks.tls_detect?'ok':'fail'}">TLS</span>
     <span class="badge \${r.checks.ws_real_connect?'ok':'fail'}">WS</span>
     <span class="badge \${r.checks.cdn_trace?'ok':'fail'}">CDN</span>\`;
@@ -1633,7 +1636,7 @@ app.get("/api", async (req, res) => {
       },
     latency: {},
     geoip: null,
-    cdn: { warp: "off" }
+    cdn: { warp: "off", egress: "未知" }
   };
 
     try {
@@ -1724,6 +1727,14 @@ app.get("/api", async (req, res) => {
           result.checks.cdn_trace = false;
           logger.warn(`CDN Trace 检测失败`, { error: err.message });
         }
+
+
+        try {
+          const egressResult = await testCDNTraceEgress(targetIP, targetPort);
+          if (egressResult.egress) result.cdn.egress = egressResult.egress;
+        } catch (err) {
+          logger.warn(`出口检测失败`, { error: err.message });
+        }
       }
 
       // 只在启用检测DEBUG日志时输出完成信息（不输出IP地址，避免泄露）
@@ -1792,7 +1803,10 @@ app.get("/api", async (req, res) => {
     
     // 保留cdn信息（包括warp状态）
     if (r.cdn) {
-      cleaned.cdn = { warp: r.cdn.warp || "off" };
+      cleaned.cdn = {
+        warp: r.cdn.warp || "off",
+        egress: r.cdn.egress || "未知"
+      };
     }
     
     // 仅在有WebSocket连接时才添加websocket信息，并精简字段
@@ -2102,6 +2116,55 @@ async function testCDNTrace(ip, port = DEFAULT_PORT, host) {
     req.on('timeout', () => {
       req.destroy();
       resolve({ success: false, warp: "off", reason: `请求超时（${CDN_TRACE_TIMEOUT/1000}秒）` });
+    });
+
+    req.end();
+  });
+}
+
+async function testCDNTraceEgress(ip, port = DEFAULT_PORT) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: ip,
+      port: port,
+      path: '/cdn-cgi/trace',
+      method: 'GET',
+      rejectUnauthorized: false,
+      timeout: CDN_TRACE_TIMEOUT,
+      servername: CDN_TRACE_HOST,
+      headers: {
+        'Host': CDN_TRACE_HOST
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        if (res.statusCode !== 200 || !data?.trim()) {
+          resolve({ success: false, egress: "未知" });
+          return;
+        }
+
+        const traceIPMatch = data.match(/(?:^|\n)ip=([^\n\r]+)/);
+        const traceIP = traceIPMatch ? traceIPMatch[1].trim() : "";
+        const egress = traceIP.includes(':') ? 'ipv6' : (traceIP.includes('.') ? 'ipv4' : '未知');
+
+        resolve({ success: true, egress });
+      });
+    });
+
+    req.on('error', () => {
+      resolve({ success: false, egress: "未知" });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, egress: "未知" });
     });
 
     req.end();
